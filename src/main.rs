@@ -34,7 +34,7 @@ async fn handle(stream: Async<TcpStream>) -> io::Result<()> {
             break;
         }
 
-        let response = process_command(&line);
+        let response = process_command(&line, Some(WAL_PATH));
 
         writer
             .write_all(format!("{}\n", response).as_bytes())
@@ -44,7 +44,9 @@ async fn handle(stream: Async<TcpStream>) -> io::Result<()> {
     Ok(())
 }
 
-fn process_command(line: &String) -> String {
+fn process_command(line: &String, wal_path: Option<&str>) -> String {
+    let path = wal_path.unwrap_or(WAL_PATH);
+
     let mut parts = line.trim_end().split_whitespace();
     let command = parts.next().map(|w| w.to_lowercase());
     let clap_args = std::iter::once("rusty-keys".to_string())
@@ -59,7 +61,7 @@ fn process_command(line: &String) -> String {
                 } else {
                     let (first, rest) = input.split_first().unwrap();
 
-                    match add(first.to_string(), rest.join(" "), Some(WAL_PATH)) {
+                    match add(first.to_string(), rest.join(" "), Some(path)) {
                       Ok(v) => format!("ADD {:?}", v),
                       Err(e) => format!("Error: {:?}", e)
                     }
@@ -69,13 +71,13 @@ fn process_command(line: &String) -> String {
               if input.len() > 0 {
                 "ALL may only be called on its own!".to_string()
               } else {
-                format!("ALL: {:?}", all(Some(WAL_PATH)))
+                format!("ALL: {:?}", all(Some(path)))
               }
             },
             Command::Get { input } => match input.first() {
                 None => "GET called with no key!".to_string(),
                 Some(_) if input.len() > 1 => "GET called with too many arguments!".to_string(),
-                Some(key) => match read_from_memory(key.clone(), Some(WAL_PATH)) {
+                Some(key) => match read_from_memory(key.clone(), Some(path)) {
                     Ok(v) => format!("{:?}", v),
                     Err(e) => format!("Error: {:?}", e),
                 },
@@ -102,37 +104,53 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn add_call_returns_formatted_response_of_key_and_value() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let wal_path = temp_file.path().to_str().unwrap();
+
+        let response = process_command(&"ADD foo bar".to_string(), Some(wal_path));
+        println!("{:?}", response);
+        assert_eq!(response, "ADD (\"foo\", \"bar\")");
+    }
+
+    fn all_returns_everything_in_wal_log() {
+    }
+
+    fn get_key_returns_corresponding_value() {
+    }
 
     #[test]
     fn get_with_no_key_returns_error_message() {
-        let response = process_command(&"GET".to_string());
+        let response = process_command(&"GET".to_string(), None);
         assert_eq!(response, "GET called with no key!");
     }
 
     #[test]
     fn get_with_too_many_args_returns_error_message() {
-        let response = process_command(&"GET foo bar".to_string());
+        let response = process_command(&"GET foo bar".to_string(), None);
         assert_eq!(response, "GET called with too many arguments!");
     }
 
     #[test]
     fn add_with_one_arg_returns_error_message() {
-        let response = process_command(&"ADD foo".to_string());
+        let response = process_command(&"ADD foo".to_string(), None);
         assert_eq!(response, "ADD called with not enough arguments!");
     }
 
     #[test]
     fn add_alone_returns_error_message() {
-        let response = process_command(&"ADD".to_string());
+        let response = process_command(&"ADD".to_string(), None);
         assert_eq!(response, "ADD called with not enough arguments!");
     }
 
     #[test]
     fn all_with_any_additional_args_returns_error_message() {
-        let response = process_command(&"ALL foo".to_string());
+        let response = process_command(&"ALL foo".to_string(), None);
         assert_eq!(response, "ALL may only be called on its own!");
     }
-
 }
 
 // hint files used for merge, compaction, speedy access

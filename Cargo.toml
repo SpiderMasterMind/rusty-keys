@@ -14,3 +14,4 @@ smol = "2.0.2"
 
 [dev-dependencies]
 assert_matches_regex = "0.1"
+tempfile = "3"
