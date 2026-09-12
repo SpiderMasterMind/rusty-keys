@@ -13,8 +13,8 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    Add { inputs: Vec<String> },
-    All,
+    Add { input: Vec<String> },
+    All { input: Vec<String> },
     Get { input: Vec<String> },
 }
 
@@ -25,7 +25,6 @@ async fn handle(stream: Async<TcpStream>) -> io::Result<()> {
     let mut line = String::new();
 
     let mut writer = &stream;
-    let mut response: String;
 
     loop {
         line.clear();
@@ -35,51 +34,7 @@ async fn handle(stream: Async<TcpStream>) -> io::Result<()> {
             break;
         }
 
-        let command = &line.trim_end();
-        let parts = command.split_whitespace();
-
-        let args = std::iter::once("rusty-keys").chain(parts);
-
-        match Args::try_parse_from(args) {
-            Ok(parsed) => match parsed.command {
-                Command::Add { inputs } => {
-                    if inputs.len() < 2 {
-                        response = format!("ADD called with not enough arguments!");
-                    } else {
-                        let (first, rest) = inputs.split_first().unwrap();
-                        let result = add(first.to_string(), rest.join(" "), Some(WAL_PATH));
-
-                        response = match result {
-                          Ok(v) => format!("ADD {:?}", v),
-                          Err(e) => format!("Error: {:?}", e)
-                        }
-                    }
-                }
-                Command::All => {
-                    let contents = all(Some(WAL_PATH));
-                    response = contents.unwrap();
-                }
-                Command::Get { input } => {
-                    if input.len() > 1 {
-                        response = format!("GET called with too many arguments!");
-                    } else {
-                        let key = input.clone().remove(0);
-                        let result = read_from_memory(key, Some(WAL_PATH));
-
-                        response = match result {
-                          Ok(v) => v.1,
-                          Err(e) => format!("Error for GET: {:?}", e)
-                        }
-                    }
-                }
-            },
-            Err(e) => {
-                writer
-                    .write_all(format!("Error: {}\n", e).as_bytes())
-                    .await?;
-                continue;
-            }
-        }
+        let response = process_command(&line);
 
         writer
             .write_all(format!("{}\n", response).as_bytes())
@@ -87,6 +42,47 @@ async fn handle(stream: Async<TcpStream>) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+fn process_command(line: &String) -> String {
+    let mut parts = line.trim_end().split_whitespace();
+    let command = parts.next().map(|w| w.to_lowercase());
+    let clap_args = std::iter::once("rusty-keys".to_string())
+      .chain(command)
+      .chain(parts.map(|s| s.to_string()));
+
+    match Args::try_parse_from(clap_args) {
+        Ok(parsed) => match parsed.command {
+            Command::Add { input } => {
+                if input.len() < 2 {
+                    "ADD called with not enough arguments!".to_string()
+                } else {
+                    let (first, rest) = input.split_first().unwrap();
+
+                    match add(first.to_string(), rest.join(" "), Some(WAL_PATH)) {
+                      Ok(v) => format!("ADD {:?}", v),
+                      Err(e) => format!("Error: {:?}", e)
+                    }
+                }
+            },
+            Command::All { input } => {
+              if input.len() > 0 {
+                "ALL may only be called on its own!".to_string()
+              } else {
+                format!("ALL: {:?}", all(Some(WAL_PATH)))
+              }
+            },
+            Command::Get { input } => match input.first() {
+                None => "GET called with no key!".to_string(),
+                Some(_) if input.len() > 1 => "GET called with too many arguments!".to_string(),
+                Some(key) => match read_from_memory(key.clone(), Some(WAL_PATH)) {
+                    Ok(v) => format!("{:?}", v),
+                    Err(e) => format!("Error: {:?}", e),
+                },
+            },
+        },
+        Err(e) => format!("Error: {}", e),
+    }
 }
 
 fn main() -> io::Result<()> {
@@ -101,6 +97,42 @@ fn main() -> io::Result<()> {
             smol::spawn(handle(stream)).detach();
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_with_no_key_returns_error_message() {
+        let response = process_command(&"GET".to_string());
+        assert_eq!(response, "GET called with no key!");
+    }
+
+    #[test]
+    fn get_with_too_many_args_returns_error_message() {
+        let response = process_command(&"GET foo bar".to_string());
+        assert_eq!(response, "GET called with too many arguments!");
+    }
+
+    #[test]
+    fn add_with_one_arg_returns_error_message() {
+        let response = process_command(&"ADD foo".to_string());
+        assert_eq!(response, "ADD called with not enough arguments!");
+    }
+
+    #[test]
+    fn add_alone_returns_error_message() {
+        let response = process_command(&"ADD".to_string());
+        assert_eq!(response, "ADD called with not enough arguments!");
+    }
+
+    #[test]
+    fn all_with_any_additional_args_returns_error_message() {
+        let response = process_command(&"ALL foo".to_string());
+        assert_eq!(response, "ALL may only be called on its own!");
+    }
+
 }
 
 // hint files used for merge, compaction, speedy access
