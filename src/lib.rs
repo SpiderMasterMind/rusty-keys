@@ -187,6 +187,18 @@ mod tests {
     }
 
     #[test]
+    fn add_overwrites_value_when_key_already_exists() -> () {
+        let tmp_dir = tempdir().unwrap();
+        let file_path = tmp_dir.path().join("my-temporary-note.txt");
+        File::create(&file_path).unwrap();
+
+        add("A".to_string(), "Egg".to_string(), Some(&file_path)).unwrap();
+        let add_result = add("A".to_string(), "Bar".to_string(), Some(&file_path)).unwrap();
+
+        assert_eq!(add_result, (String::from("A"), String::from("Bar")))
+    }
+
+    #[test]
     fn read_from_memory_returns_the_keyed_value_when_it_exists() -> () {
         let tmp_dir = tempdir().unwrap();
         let file_path = tmp_dir.path().join("my-temporary-note.txt");
