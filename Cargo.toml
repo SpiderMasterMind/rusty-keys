@@ -11,6 +11,7 @@ serde-jsonlines = "0.7.0"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 smol = "2.0.2"
+async-lock = "3.4.2"
 
 [dev-dependencies]
 assert_matches_regex = "0.1"

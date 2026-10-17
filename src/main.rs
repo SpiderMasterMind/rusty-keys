@@ -1,8 +1,11 @@
-use rusty_keys::{add, all, read_from_memory};
+use rusty_keys::{add, all, read_from_memory, build_index, SharedIndex};
+
 use clap::{Parser, Subcommand};
 use smol::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use smol::{Async, io};
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc};
+use std::collections::{HashMap};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -20,9 +23,11 @@ enum Command {
 
 const WAL_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/wal.log");
 
-async fn handle(stream: Async<TcpStream>) -> io::Result<()> {
+
+async fn handle(stream: Async<TcpStream>, index: SharedIndex) -> io::Result<()> {
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
+
 
     let mut writer = &stream;
 
@@ -34,17 +39,18 @@ async fn handle(stream: Async<TcpStream>) -> io::Result<()> {
             break;
         }
 
-        let response = process_command(&line, Some(WAL_PATH));
+        let response = {
+          let mut guard = index.lock().await;
+          process_command(&line, &mut guard, Some(WAL_PATH)); 
+        };
 
-        writer
-            .write_all(format!("{}\n", response).as_bytes())
-            .await?;
+        writer.write_all(format!("{:?}\n", response).as_bytes()).await?;
     }
 
     Ok(())
 }
 
-fn process_command(line: &String, wal_path: Option<&str>) -> String {
+fn process_command(line: &String, index: &mut HashMap<String, String>, wal_path: Option<&str>) -> String {
     let path = wal_path.unwrap_or(WAL_PATH);
 
     let mut parts = line.trim_end().split_whitespace();
@@ -88,15 +94,18 @@ fn process_command(line: &String, wal_path: Option<&str>) -> String {
 }
 
 fn main() -> io::Result<()> {
+    let index: SharedIndex = build_index(Some(WAL_PATH));
+
     smol::block_on(async {
         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 7000))?;
         println!("Listening on {}", listener.get_ref().local_addr()?);
 
         loop {
             let (stream, peer_addr) = listener.accept().await?;
+            let index = Arc::clone(&index);
             println!("Accepted client: {}", peer_addr);
 
-            smol::spawn(handle(stream)).detach();
+            smol::spawn(handle(stream, index)).detach();
         }
     })
 }

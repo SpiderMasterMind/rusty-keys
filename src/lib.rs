@@ -9,7 +9,13 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use async_lock::{Mutex};
 use thiserror::Error;
+use std::sync::{Arc};
+
+// todo switch Mutex to RwLock to eventually allow many reads
+pub type SharedIndex = Arc<Mutex<HashMap<String, String>>>;
 
 struct Config {
     wal_path: PathBuf,
@@ -86,6 +92,11 @@ pub fn add<P: AsRef<Path>>(
 
     append_json_lines(&path, &values)?;
     Ok((key, value))
+}
+
+pub fn build_index<P: AsRef<Path>>(wal_path: Option<P>) -> SharedIndex {
+  // 
+  todo!()
 }
 
 pub fn replay_into_memory<P: AsRef<Path>>(wal_path: Option<P>) -> Result<Vec<Entry>> {
