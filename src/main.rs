@@ -1,10 +1,11 @@
-use rusty_keys::{add, all, read_from_memory, build_index, SharedIndex};
+use rusty_keys::{add, all, fetch_from_index, build_index, SharedIndex};
 
 use clap::{Parser, Subcommand};
 use smol::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use smol::{Async, io};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc};
+use async_lock::{Mutex};
 use std::collections::{HashMap};
 
 #[derive(Parser, Debug)]
@@ -28,7 +29,6 @@ async fn handle(stream: Async<TcpStream>, index: SharedIndex) -> io::Result<()> 
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
 
-
     let mut writer = &stream;
 
     loop {
@@ -41,20 +41,21 @@ async fn handle(stream: Async<TcpStream>, index: SharedIndex) -> io::Result<()> 
 
         let response = {
           let mut guard = index.lock().await;
-          process_command(&line, &mut guard, Some(WAL_PATH)); 
+          process_command(&line, &mut guard, Some(WAL_PATH)) 
         };
 
-        writer.write_all(format!("{:?}\n", response).as_bytes()).await?;
+        writer.write_all(format!("{}\n", response).as_bytes()).await?;
     }
 
     Ok(())
 }
 
-fn process_command(line: &String, index: &mut HashMap<String, String>, wal_path: Option<&str>) -> String {
+fn process_command(line: &String, shared_index: &mut HashMap<String, String>, wal_path: Option<&str>) -> String {
     let path = wal_path.unwrap_or(WAL_PATH);
 
     let mut parts = line.trim_end().split_whitespace();
     let command = parts.next().map(|w| w.to_lowercase());
+
     let clap_args = std::iter::once("rusty-keys".to_string())
       .chain(command)
       .chain(parts.map(|s| s.to_string()));
@@ -83,7 +84,7 @@ fn process_command(line: &String, index: &mut HashMap<String, String>, wal_path:
             Command::Get { input } => match input.first() {
                 None => "GET called with no key!".to_string(),
                 Some(_) if input.len() > 1 => "GET called with too many arguments!".to_string(),
-                Some(key) => match read_from_memory(key.clone(), Some(path)) {
+                Some(key) => match fetch_from_index(key.clone(), shared_index) {
                     Ok(v) => format!("{:?}", v),
                     Err(e) => format!("Error: {:?}", e),
                 },
@@ -94,7 +95,7 @@ fn process_command(line: &String, index: &mut HashMap<String, String>, wal_path:
 }
 
 fn main() -> io::Result<()> {
-    let index: SharedIndex = build_index(Some(WAL_PATH));
+    let index: SharedIndex = Arc::new(Mutex::new(build_index(Some(WAL_PATH))?));
 
     smol::block_on(async {
         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 7000))?;
@@ -119,45 +120,70 @@ mod tests {
     fn add_call_returns_formatted_response_of_key_and_value() {
         let temp_file = NamedTempFile::new().unwrap();
         let wal_path = temp_file.path().to_str().unwrap();
+        let mut index = HashMap::new();
 
-        let response = process_command(&"ADD foo bar".to_string(), Some(wal_path));
+        let response = process_command(&"ADD foo bar".to_string(), &mut index, Some(wal_path));
         println!("{:?}", response);
         assert_eq!(response, "ADD (\"foo\", \"bar\")");
     }
 
-    fn all_returns_everything_in_wal_log() {
-    }
-
-    fn get_key_returns_corresponding_value() {
-    }
-
     #[test]
     fn get_with_no_key_returns_error_message() {
-        let response = process_command(&"GET".to_string(), None);
+        let mut index = HashMap::new();
+        index.insert(
+          "foo".to_string(),
+          "bar".to_string()
+        );
+
+        let response = process_command(&"GET".to_string(), &mut index, None);
         assert_eq!(response, "GET called with no key!");
     }
 
     #[test]
     fn get_with_too_many_args_returns_error_message() {
-        let response = process_command(&"GET foo bar".to_string(), None);
+        let mut index = HashMap::new();
+        index.insert(
+          "foo".to_string(),
+          "bar".to_string()
+        );
+
+        let response = process_command(&"GET foo bar".to_string(), &mut index, None);
         assert_eq!(response, "GET called with too many arguments!");
     }
 
     #[test]
     fn add_with_one_arg_returns_error_message() {
-        let response = process_command(&"ADD foo".to_string(), None);
+        let mut index = HashMap::new();
+        index.insert(
+          "foo".to_string(),
+          "bar".to_string()
+        );
+
+        let response = process_command(&"ADD foo".to_string(),  &mut index, None);
         assert_eq!(response, "ADD called with not enough arguments!");
     }
 
     #[test]
     fn add_alone_returns_error_message() {
-        let response = process_command(&"ADD".to_string(), None);
+        let mut index = HashMap::new();
+        index.insert(
+          "foo".to_string(),
+          "bar".to_string()
+        );
+
+        let response = process_command(&"ADD".to_string(), &mut index, None);
         assert_eq!(response, "ADD called with not enough arguments!");
     }
 
     #[test]
     fn all_with_any_additional_args_returns_error_message() {
-        let response = process_command(&"ALL foo".to_string(), None);
+        let mut index = HashMap::new();
+        index.insert(
+          "foo".to_string(),
+          "bar".to_string()
+        );
+
+        let response = process_command(&"ALL foo".to_string(), &mut index, None);
         assert_eq!(response, "ALL may only be called on its own!");
     }
 }

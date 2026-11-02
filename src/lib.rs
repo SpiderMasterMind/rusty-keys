@@ -65,6 +65,12 @@ pub enum StoreError {
     WalReadFailed(#[from] anyhow::Error),
 }
 
+impl From<StoreError> for std::io::Error {
+    fn from(e: StoreError) -> Self {
+        std::io::Error::other(e)
+    }
+}
+
 pub fn add<P: AsRef<Path>>(
     key: String,
     value: String,
@@ -94,9 +100,23 @@ pub fn add<P: AsRef<Path>>(
     Ok((key, value))
 }
 
-pub fn build_index<P: AsRef<Path>>(wal_path: Option<P>) -> SharedIndex {
-  // 
-  todo!()
+pub fn build_index<P: AsRef<Path>>(wal_path: Option<P>) -> Result<HashMap<String, String>, StoreError> {
+    let entries = replay_into_memory(wal_path)?;
+
+    let mut index = HashMap::new();
+    for entry in entries {
+        index.insert(entry.key, entry.value);
+    }
+
+    Ok(index)
+}
+
+pub fn fetch_from_index(key: String, index: &mut HashMap<String, String>) -> Result<(String, String), StoreError> {
+  let value = index
+     .get(&key)
+     .cloned()
+     .ok_or_else(|| StoreError::NotFound(key.clone()))?;
+  Ok((key, value))
 }
 
 pub fn replay_into_memory<P: AsRef<Path>>(wal_path: Option<P>) -> Result<Vec<Entry>> {
@@ -108,25 +128,6 @@ pub fn replay_into_memory<P: AsRef<Path>>(wal_path: Option<P>) -> Result<Vec<Ent
         .map(|r| r.map_err(anyhow::Error::msg))
         .collect::<Result<Vec<Entry>>>()?;
     Ok(entries)
-}
-
-pub fn read_from_memory<P: AsRef<Path>>(
-    key: String,
-    wal_path: Option<P>,
-) -> Result<(String, String), StoreError> {
-    let entries = replay_into_memory(wal_path)?;
-    let mut result_hash = HashMap::new();
-
-    for entry in entries {
-        result_hash.insert(entry.key, entry.value);
-    }
-
-    let value = result_hash
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| StoreError::NotFound(key.clone()))?;
-
-    Ok((key, value))
 }
 
 pub fn all<P: AsRef<Path>>(wal_path: Option<P>) -> Result<String> {
@@ -210,32 +211,31 @@ mod tests {
     }
 
     #[test]
-    fn read_from_memory_returns_the_keyed_value_when_it_exists() -> () {
-        let tmp_dir = tempdir().unwrap();
-        let file_path = tmp_dir.path().join("my-temporary-note.txt");
-        File::create(&file_path).unwrap();
+    fn fetch_from_index_returns_the_keyed_value_when_it_exists() -> () {
+        let mut index = HashMap::new();
+        index.insert(
+          "foo".to_string(),
+          "bar".to_string()
+        );
 
-        add("A".into(), "Egg".into(), Some(&file_path)).unwrap();
-        add("B".into(), "Man".into(), Some(&file_path)).unwrap();
-
-        let result = read_from_memory("B".to_string(), Some(&file_path));
+        let result = fetch_from_index("foo".to_string(), &mut index);
 
         assert_eq!(
             result.unwrap(),
-            (String::from("B"), String::from("Man")),
+            (String::from("foo"), String::from("bar")),
             "incorrect value"
         )
     }
 
     #[test]
-    fn read_from_memory_returns_an_err_when_it_doesnt_exist() -> () {
-        let tmp_dir = tempdir().unwrap();
-        let file_path = tmp_dir.path().join("my-temporary-note.txt");
-        File::create(&file_path).unwrap();
+    fn fetch_from_index_returns_an_err_when_it_doesnt_exist() -> () {
+        let mut index = HashMap::new();
+        index.insert(
+          "foo".to_string(),
+          "bar".to_string()
+        );
 
-        add("A".into(), "Egg".into(), Some(&file_path)).unwrap();
-
-        let result = read_from_memory("B".to_string(), Some(&file_path));
+        let result = fetch_from_index("baz".to_string(), &mut index);
 
         assert!(matches!(result, Err(StoreError::NotFound(_))));
     }
